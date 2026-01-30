@@ -35,6 +35,7 @@ def get_beijing_time():
 
 
 def main():
+    # 路径定义
     db_path = os.path.join('output', 'funds_manager.db')
     log_path = os.path.join('output', 'daily_sync.log')
     csv_path = os.path.join('output', 'funds_history_export.csv')
@@ -45,17 +46,7 @@ def main():
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    # --- 核心优化：智能检查并升级表结构 ---
-    try:
-        cursor.execute("SELECT fund_code FROM fund_history LIMIT 1")
-        # 如果执行成功，说明还是旧的英文列名，我们直接删表重建（因为数据量小，重新抓取很快）
-        print("检测到旧版英文表，正在自动升级为中文结构...")
-        cursor.execute("DROP TABLE fund_history")
-    except sqlite3.OperationalError:
-        # 如果报错，说明已经是中文表或者表不存在，这是正常的
-        pass
-
-    # 创建中文列名的表
+    # 创建中文列名的表（因为你会删除旧DB，所以这里直接创建即可）
     cursor.execute('''CREATE TABLE IF NOT EXISTS fund_history 
                     (基金代码 TEXT, 日期 TEXT, 单位净值 REAL, 
                      累计净值 REAL, 日涨跌幅 REAL, 
@@ -73,6 +64,7 @@ def main():
         if res:
             results.append(res)
 
+    # 写入数据
     if results:
         df_new = pd.DataFrame(results)
         for _, row in df_new.iterrows():
@@ -82,7 +74,7 @@ def main():
             ''', (row['基金代码'], row['日期'], row['单位净值'], row['累计净值'], row['日涨跌幅']))
         conn.commit()
 
-    # 导出 CSV
+    # 导出全量 CSV (中文列名)
     full_df = pd.read_sql("SELECT * FROM fund_history ORDER BY 日期 DESC", conn)
     full_df.to_csv(csv_path, index=False, encoding='utf-8-sig')
 
@@ -93,7 +85,7 @@ def main():
     report = (
             f"\n" + "=" * 40 + "\n"
                                f"📊 数据同步报告 | {bj_now.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                               f"✅ 状态反馈: 数据汉化同步成功\n"
+                               f"✅ 状态反馈: 全新中文数据库初始化及同步成功\n"
                                f"📈 数据库总条数: {after_count} 条\n"
                                f"========================================\n"
     )

@@ -2,8 +2,8 @@ name: Fund Daily Sync
 
 on:
   schedule:
-    - cron: '0 13 * * *' # 北京时间每天晚上 21:00 运行
-  workflow_dispatch:      # 允许你手动点击按钮运行测试
+    - cron: '0 13 * * *' # 北京时间每天 21:00 自动运行
+  workflow_dispatch:      # 允许手动点火
 
 jobs:
   build:
@@ -22,17 +22,20 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Run Spider
+      - name: Run Spider and Report
         run: |
-          # 关键：根据你之前的清单，脚本在 program 文件夹下
           python program/fund_db_manager.py
 
       - name: Commit and Push changes
         run: |
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "actions@github.com"
+          
+          # 设置北京时间
+          export TZ='Asia/Shanghai'
+          CUR_TIME=$(date "+%Y-%m-%d %H:%M")
+          
           git add .
-          # 使用 $(date) 获取当前时间并放入 commit 信息
-          CURRENT_TIME=$(date "+%Y-%m-%d %H:%M:%S")
-          git commit -m "自动同步 | $CURRENT_TIME | 检查并更新净值" || exit 0
+          # 如果没有变化则跳过，如果有变化则使用中文 Commit
+          git commit -m "自动更新 | $CUR_TIME | 数据库已同步" || exit 0
           git push

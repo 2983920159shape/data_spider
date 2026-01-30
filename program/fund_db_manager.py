@@ -11,7 +11,7 @@ def fetch_fund_data(fund_code):
     """抓取基金净值数据"""
     url = f"https://fundgz.1234567.com.cn/js/{fund_code}.js"
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=15)
         match = re.search(r'jsonpgz\((.*)\);', response.text)
         if match:
             data = json.loads(match.group(1))
@@ -28,34 +28,38 @@ def fetch_fund_data(fund_code):
 
 
 def main():
-    # 确保路径通用
+    # 路径处理：兼容本地 Windows 和云端 Linux
     db_path = os.path.join('output', 'funds_manager.db')
     if not os.path.exists('output'):
         os.makedirs('output')
 
     conn = sqlite3.connect(db_path)
 
-    # 运行前检查数据条数 (使用 pandas 读取)
+    # 1. 检查运行前状态
     try:
-        df_before = pd.read_sql("SELECT * FROM fund_history", conn)
-        before_count = len(df_before)
+        before_df = pd.read_sql("SELECT * FROM fund_history", conn)
+        before_count = len(before_df)
     except:
         before_count = 0
+        # 如果表不存在则创建
+        conn.execute('''CREATE TABLE IF NOT EXISTS fund_history 
+                        (fund_code TEXT, date TEXT, unit_value REAL, 
+                         total_value REAL, growth_rate REAL, 
+                         PRIMARY KEY (fund_code, date))''')
 
-    # 执行抓取
+    # 2. 执行抓取任务
     fund_list = ['023350']
-    print(f"[{datetime.now()}] 启动云端同步程序 (Pandas版)...")
+    print(f"[{datetime.now()}] 启动同步程序 (Pandas 驱动)...")
 
     results = []
     for code in fund_list:
-        data = fetch_fund_data(code)
-        if data:
-            results.append(data)
+        res = fetch_fund_data(code)
+        if res:
+            results.append(res)
 
+    # 3. 增量写入数据库
     if results:
         df_new = pd.DataFrame(results)
-        # 写入数据库，重复的 (code, date) 会因为 PRIMARY KEY 冲突而忽略
-        # 我们手动处理或使用 SQL 语句
         cursor = conn.cursor()
         for _, row in df_new.iterrows():
             cursor.execute('''
@@ -64,19 +68,19 @@ def main():
             ''', (row['fund_code'], row['date'], row['unit_value'], row['total_value'], row['growth_rate']))
         conn.commit()
 
-    # 运行后检查
-    df_after = pd.read_sql("SELECT * FROM fund_history", conn)
-    after_count = len(df_after)
+    # 4. 检查运行后状态
+    after_df = pd.read_sql("SELECT * FROM fund_history", conn)
+    after_count = len(after_df)
     new_records = after_count - before_count
     conn.close()
 
-    # --- 战果汇报 ---
-    print("\n" + "=" * 35)
-    print(f"📊 Pandas 运行报告 | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"✅ 今日成功更新: {new_records} 条数据")
+    # --- 自动化战果汇报 ---
+    print("\n" + "=" * 40)
+    print(f"📊 数据同步报告 | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"✅ 本次新增记录: {new_records} 条")
     print(f"📈 数据库总条数: {after_count} 条")
-    print(f"📅 状态: {'数据已同步' if new_records > 0 else '非交易日或已存在'}")
-    print("=" * 35 + "\n")
+    print(f"📅 状态反馈: {'数据更新成功' if new_records > 0 else '今日暂无新数据或非交易日'}")
+    print("=" * 40 + "\n")
 
 
 if __name__ == "__main__":

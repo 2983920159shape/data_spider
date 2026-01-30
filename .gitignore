@@ -1,9 +1,7 @@
-        # 忽略虚拟环境文件夹
-        pythonEnvs/
-        venv/
-        .venv/
-        
-  
-        
-        # 忽略 PyCharm 的配置文件
-        .idea/
+# 忽略虚拟环境文件夹
+pythonEnvs/
+venv/
+.venv/
+
+# 忽略 PyCharm 的配置文件
+.idea/

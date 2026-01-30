@@ -1,76 +1,91 @@
 import requests
-import json
-import re
 import sqlite3
+import pandas as pd
+from datetime import datetime
 import os
-import math
-import time
-
-# --- [1. 路径与配置] ---
-# 优先使用本地 D 盘，否则使用脚本同级目录
-local_path = r"D:\quant\webCrawlerProjectPractice\output"
-output_dir = local_path if os.path.exists(local_path) else os.path.dirname(os.path.abspath(__file__))
-db_path = os.path.join(output_dir, "funds_manager.db")
-
-target_fund = "023350"
+import re
+import json
 
 
-# --- [2. 数据库逻辑] ---
-def init_db():
+def fetch_fund_data(fund_code):
+    """抓取基金净值数据"""
+    url = f"https://fundgz.1234567.com.cn/js/{fund_code}.js"
+    try:
+        response = requests.get(url, timeout=10)
+        # 使用正则提取 JSON 内容
+        match = re.search(r'jsonpgz\((.*)\);', response.text)
+        if match:
+            data = json.loads(match.group(1))
+            return {
+                'fund_code': data['fundcode'],
+                'date': data['gztime'].split(' ')[0],  # 只取日期部分
+                'unit_value': float(data['gsz']),
+                'total_value': float(data['gsz']),  # 简易处理，通常总净值需另抓
+                'growth_rate': float(data['gszzl'])
+            }
+    except Exception as e:
+        print(f"抓取基金 {fund_code} 失败: {e}")
+    return None
+
+
+def main():
+    # 确保路径在云端也能被找到
+    db_path = os.path.join('output', 'funds_manager.db')
+
+    # 如果 output 文件夹不存在则创建（防止云端环境初始报错）
+    if not os.path.exists('output'):
+        os.makedirs('output')
+
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
+
+    # 确保表结构存在
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS fund_history (
-            fund_code TEXT, date TEXT, unit_value REAL, 
-            total_value REAL, growth_rate TEXT,
-            PRIMARY KEY(fund_code, date)
+            fund_code TEXT,
+            date TEXT,
+            unit_value REAL,
+            total_value REAL,
+            growth_rate REAL,
+            PRIMARY KEY (fund_code, date)
         )
     ''')
+
+    # 记录运行前的行数
+    cursor.execute("SELECT COUNT(*) FROM fund_history")
+    before_count = cursor.fetchone()[0]
+
+    # 需要抓取的基金列表
+    fund_list = ['023350']
+
+    print(f"[{datetime.now()}] 启动云端同步程序...")
+
+    for code in fund_list:
+        data = fetch_fund_data(code)
+        if data:
+            # 使用 INSERT OR IGNORE 防止重复插入同一天数据导致报错
+            cursor.execute('''
+                INSERT OR IGNORE INTO fund_history (fund_code, date, unit_value, total_value, growth_rate)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (data['fund_code'], data['date'], data['unit_value'], data['total_value'], data['growth_rate']))
+
     conn.commit()
-    return conn
 
+    # 记录运行后的行数
+    cursor.execute("SELECT COUNT(*) FROM fund_history")
+    after_count = cursor.fetchone()[0]
+    new_records = after_count - before_count
 
-def fetch_data(code, page):
-    """通用的抓取函数"""
-    url = f"https://api.fund.eastmoney.com/f10/lsjz?callback=jQuery&fundCode={code}&pageIndex={page}&pageSize=20"
-    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://fundf10.eastmoney.com/"}
-    res = requests.get(url, headers=headers)
-    json_str = re.search(r'\((.*)\)', res.text).group(1)
-    return json.loads(json_str)
+    conn.close()
 
-
-def sync_fund(conn, code):
-    # 1. 检查本地数据库里这只基金有多少条记录
-    cursor = conn.cursor()
-    cursor.execute("SELECT count(*) FROM fund_history WHERE fund_code=?", (code,))
-    local_count = cursor.fetchone()[0]
-
-    # 2. 获取服务器上的总条数
-    first_page = fetch_data(code, 1)
-    server_count = int(first_page['TotalCount'])
-
-    # 3. 决定抓取范围
-    if local_count < server_count:
-        # 如果本地数据少于服务器，说明需要补历史数据，计算总页数进行全量同步
-        pages_to_fetch = math.ceil(server_count / 20)
-        print(f"检测到数据缺失（本地:{local_count} < 远程:{server_count}），开始同步共 {pages_to_fetch} 页...")
-    else:
-        # 否则只抓第一页（增量更新）
-        pages_to_fetch = 1
-        print(f"数据已是最新或只需增量检查，仅抓取第1页...")
-
-    for page in range(1, pages_to_fetch + 1):
-        print(f"正在同步第 {page}/{pages_to_fetch} 页...")
-        data = fetch_data(code, page)
-        for item in data['Data']['LSJZList']:
-            sql = "INSERT OR IGNORE INTO fund_history VALUES (?, ?, ?, ?, ?)"
-            cursor.execute(sql, (code, item['FSRQ'], item['DWJZ'], item['LJJZ'], item['JZZZL']))
-        conn.commit()
-        time.sleep(0.5)
+    # --- 战果汇报模块 ---
+    print("\n" + "=" * 35)
+    print(f"📊 运行报告 | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"✅ 今日成功更新: {new_records} 条数据")
+    print(f"📈 数据库总条数: {after_count} 条")
+    print(f"📅 状态: {'数据已更新' if new_records > 0 else '今日非交易日或数据已存在'}")
+    print("=" * 35 + "\n")
 
 
 if __name__ == "__main__":
-    db_conn = init_db()
-    sync_fund(db_conn, target_fund)
-    db_conn.close()
-    print("同步任务结束。")
+    main()

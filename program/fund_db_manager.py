@@ -11,17 +11,18 @@ def fetch_fund_data(fund_code):
     """抓取基金净值数据"""
     url = f"https://fundgz.1234567.com.cn/js/{fund_code}.js"
     try:
+        # 增加 User-Agent 伪装，提高云端访问成功率
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        response = requests.get(url, timeout=20, headers=headers)
+        response = requests.get(url, timeout=25, headers=headers)
         match = re.search(r'jsonpgz\((.*)\);', response.text)
         if match:
             data = json.loads(match.group(1))
             return {
-                '基金代码': data['fundcode'],
-                '日期': data['gztime'].split(' ')[0],
-                '单位净值': float(data['gsz']),
-                '累计净值': float(data['gsz']),
-                '日涨跌幅': float(data['gszzl'])
+                'fund_code': data['fundcode'],
+                'date': data['gztime'].split(' ')[0],
+                'unit_value': float(data['gsz']),
+                'total_value': float(data['gsz']),
+                'growth_rate': float(data['gszzl'])
             }
     except Exception as e:
         print(f"抓取基金 {fund_code} 失败: {e}")
@@ -30,6 +31,7 @@ def fetch_fund_data(fund_code):
 
 def get_beijing_time():
     """获取精准的北京时间"""
+    # 强制偏移 UTC+8
     tz_beijing = timezone(timedelta(hours=8))
     return datetime.now(tz_beijing)
 
@@ -44,48 +46,47 @@ def main():
 
     conn = sqlite3.connect(db_path)
 
-    # 1. 确保表结构（使用中文列名）
+    # 保持旧的英文列名结构
     conn.execute('''CREATE TABLE IF NOT EXISTS fund_history 
-                    (基金代码 TEXT, 日期 TEXT, 单位净值 REAL, 
-                     累计净值 REAL, 日涨跌幅 REAL, 
-                     PRIMARY KEY (基金代码, 日期))''')
+                    (fund_code TEXT, date TEXT, unit_value REAL, 
+                     total_value REAL, growth_rate REAL, 
+                     PRIMARY KEY (fund_code, date))''')
 
-    # 检查运行前状态
+    # 检查运行前数据量
     before_df = pd.read_sql("SELECT * FROM fund_history", conn)
     before_count = len(before_df)
 
-    # 2. 执行抓取任务
+    # 获取北京时间并打印报告头部
     bj_now = get_beijing_time()
-    fund_list = ['023350']
     print(f"[{bj_now.strftime('%Y-%m-%d %H:%M:%S')}] 启动云端同步程序...")
 
+    # 执行抓取
+    fund_list = ['023350']
     results = []
     for code in fund_list:
         res = fetch_fund_data(code)
         if res:
             results.append(res)
 
-    # 3. 写入数据库
+    # 写入增量数据
     if results:
         df_new = pd.DataFrame(results)
         cursor = conn.cursor()
         for _, row in df_new.iterrows():
             cursor.execute('''
-                INSERT OR IGNORE INTO fund_history (基金代码, 日期, 单位净值, 累计净值, 日涨跌幅)
+                INSERT OR IGNORE INTO fund_history (fund_code, date, unit_value, total_value, growth_rate)
                 VALUES (?, ?, ?, ?, ?)
-            ''', (row['基金代码'], row['日期'], row['单位净值'], row['累计净值'], row['日涨跌幅']))
+            ''', (row['fund_code'], row['date'], row['unit_value'], row['total_value'], row['growth_rate']))
         conn.commit()
 
-    # 4. 获取最新数据并导出 CSV
-    full_df = pd.read_sql("SELECT * FROM fund_history ORDER BY 日期 DESC", conn)
+    # 刷新状态并导出 CSV
+    full_df = pd.read_sql("SELECT * FROM fund_history ORDER BY date DESC", conn)
     after_count = len(full_df)
     new_records = after_count - before_count
-
-    # 导出中文列名的 CSV
     full_df.to_csv(csv_path, index=False, encoding='utf-8-sig')
     conn.close()
 
-    # 5. 生成报告
+    # 生成报告内容
     report = (
             f"\n" + "=" * 40 + "\n"
                                f"📊 数据同步报告 | {bj_now.strftime('%Y-%m-%d %H:%M:%S')}\n"
